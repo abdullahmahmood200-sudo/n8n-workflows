@@ -1,0 +1,207 @@
+import pandas as pd
+import os
+
+# ==========================================
+# CONFIGURATION
+# ==========================================
+MERGED_FILE = r'D:\Monthly Reports\Merged Output\Poker_Stats_Filtered.xlsx'
+CLEANED_FILE = r'D:\Monthly Reports\Merged Output\Poker_Stats_CLEANED.xlsx'
+DUPLICATE_REPORT = r'D:\Monthly Reports\Merged Output\Duplicate_Analysis.xlsx'
+
+def analyze_and_remove_duplicates():
+    print("=" * 80)
+    print("🔍 DUPLICATE ANALYSIS & REMOVAL")
+    print("=" * 80)
+    
+    # ==========================================
+    # STEP 1: Load merged file
+    # ==========================================
+    print("\n📊 Step 1: Loading merged file...")
+    df = pd.read_excel(MERGED_FILE)
+    print(f"✅ Loaded {len(df)} total rows")
+    
+    # ==========================================
+    # STEP 2: Identify duplicates
+    # ==========================================
+    print("\n🔍 Step 2: Analyzing duplicates...")
+    
+    # Find duplicates based on Member_ID + Source_File
+    # (Same player should only appear once per file)
+    duplicate_mask = df.duplicated(subset=['Member_ID', 'Source_File'], keep=False)
+    duplicates = df[duplicate_mask].copy()
+    
+    print(f"   Total duplicate rows found: {len(duplicates)}")
+    
+    if len(duplicates) == 0:
+        print("✅ No duplicates found - file is clean!")
+        return
+    
+    # ==========================================
+    # STEP 3: Analyze duplicate patterns
+    # ==========================================
+    print("\n📊 Step 3: Understanding duplicate patterns...")
+    
+    # Group duplicates by Member_ID and Source_File
+    duplicate_groups = duplicates.groupby(['Member_ID', 'Source_File']).size().reset_index(name='Count')
+    duplicate_groups = duplicate_groups.sort_values('Count', ascending=False)
+    
+    print(f"   Unique players with duplicates: {len(duplicate_groups)}")
+    print(f"   Max duplicates for single player: {duplicate_groups['Count'].max()}")
+    
+    # Show top 10 most duplicated players
+    print("\n   Top 10 most duplicated players:")
+    top_duplicates = duplicate_groups.head(10)
+    for idx, row in top_duplicates.iterrows():
+        player_dupes = df[(df['Member_ID'] == row['Member_ID']) & 
+                          (df['Source_File'] == row['Source_File'])]
+        nickname = player_dupes['Nickname'].iloc[0] if len(player_dupes) > 0 else 'Unknown'
+        print(f"   - {nickname} (ID: {row['Member_ID']}) in {row['Source_File']}: {row['Count']} copies")
+    
+    # ==========================================
+    # STEP 4: Check if duplicates are identical
+    # ==========================================
+    print("\n🔎 Step 4: Checking if duplicates have identical data...")
+    
+    # For each duplicate group, check if all rows are identical
+    identical_count = 0
+    different_count = 0
+    
+    for (member_id, source_file), group in df[duplicate_mask].groupby(['Member_ID', 'Source_File']):
+        # Compare all rows in this group
+        # Drop Source_File column for comparison since it's the same
+        comparison_cols = [col for col in df.columns if col != 'Source_File']
+        
+        first_row = group[comparison_cols].iloc[0]
+        all_identical = True
+        
+        for idx in range(1, len(group)):
+            if not group[comparison_cols].iloc[idx].equals(first_row):
+                all_identical = False
+                break
+        
+        if all_identical:
+            identical_count += 1
+        else:
+            different_count += 1
+    
+    print(f"   Players with identical duplicate rows: {identical_count}")
+    print(f"   Players with DIFFERENT duplicate rows: {different_count}")
+    
+    if different_count > 0:
+        print("\n   ⚠️  WARNING: Some duplicates have different data!")
+        print("      This might indicate a data quality issue in source files.")
+    
+    # ==========================================
+    # STEP 5: Remove duplicates (keep first)
+    # ==========================================
+    print("\n🧹 Step 5: Removing duplicates...")
+    
+    # Keep the first occurrence of each Member_ID + Source_File combination
+    df_cleaned = df.drop_duplicates(subset=['Member_ID', 'Source_File'], keep='first')
+    
+    rows_removed = len(df) - len(df_cleaned)
+    print(f"   Rows before: {len(df)}")
+    print(f"   Rows after: {len(df_cleaned)}")
+    print(f"   Rows removed: {rows_removed}")
+    
+    # ==========================================
+    # STEP 6: Save cleaned file
+    # ==========================================
+    print("\n💾 Step 6: Saving cleaned file...")
+    
+    try:
+        df_cleaned.to_excel(CLEANED_FILE, index=False)
+        print(f"✅ Cleaned file saved to: {CLEANED_FILE}")
+    except Exception as e:
+        print(f"❌ Error saving cleaned file: {e}")
+        return
+    
+    # ==========================================
+    # STEP 7: Create duplicate analysis report
+    # ==========================================
+    print("\n📝 Step 7: Creating duplicate analysis report...")
+    
+    try:
+        with pd.ExcelWriter(DUPLICATE_REPORT, engine='openpyxl') as writer:
+            # Sheet 1: Summary
+            summary_data = {
+                'Metric': [
+                    'Total Rows (Before)',
+                    'Total Rows (After)',
+                    'Duplicate Rows Removed',
+                    'Unique Players with Duplicates',
+                    'Identical Duplicates',
+                    'Different Duplicates'
+                ],
+                'Value': [
+                    len(df),
+                    len(df_cleaned),
+                    rows_removed,
+                    len(duplicate_groups),
+                    identical_count,
+                    different_count
+                ]
+            }
+            pd.DataFrame(summary_data).to_excel(writer, sheet_name='Summary', index=False)
+            
+            # Sheet 2: Duplicate groups (who was duplicated)
+            duplicate_groups.to_excel(writer, sheet_name='Duplicate Groups', index=False)
+            
+            # Sheet 3: Full duplicate records
+            duplicates_sorted = duplicates.sort_values(['Source_File', 'Member_ID'])
+            duplicates_sorted.to_excel(writer, sheet_name='All Duplicates', index=False)
+            
+            # Sheet 4: Sample of different duplicates (if any)
+            if different_count > 0:
+                # Find examples where duplicates differ
+                different_examples = []
+                for (member_id, source_file), group in df[duplicate_mask].groupby(['Member_ID', 'Source_File']):
+                    if len(group) > 1:
+                        comparison_cols = [col for col in df.columns if col != 'Source_File']
+                        first_row = group[comparison_cols].iloc[0]
+                        
+                        for idx in range(1, len(group)):
+                            if not group[comparison_cols].iloc[idx].equals(first_row):
+                                different_examples.append(group)
+                                break
+                    
+                    if len(different_examples) >= 5:  # Limit to 5 examples
+                        break
+                
+                if different_examples:
+                    pd.concat(different_examples).to_excel(writer, sheet_name='Different Duplicates', index=False)
+        
+        print(f"✅ Duplicate analysis report saved to: {DUPLICATE_REPORT}")
+    except Exception as e:
+        print(f"❌ Error saving report: {e}")
+    
+    # ==========================================
+    # STEP 8: Final verification
+    # ==========================================
+    print("\n✅ Step 8: Final verification...")
+    
+    # Check for duplicates in cleaned file
+    final_duplicates = df_cleaned.duplicated(subset=['Member_ID', 'Source_File'], keep=False).sum()
+    
+    if final_duplicates == 0:
+        print(f"✅ Verification passed - no duplicates in cleaned file!")
+    else:
+        print(f"⚠️  Warning: {final_duplicates} duplicates still found!")
+    
+    # ==========================================
+    # FINAL SUMMARY
+    # ==========================================
+    print("\n" + "=" * 80)
+    print("🎯 DUPLICATE REMOVAL COMPLETE")
+    print("=" * 80)
+    print(f"✅ Original file: {len(df)} rows")
+    print(f"✅ Cleaned file: {len(df_cleaned)} rows")
+    print(f"✅ Duplicates removed: {rows_removed}")
+    print(f"\n📁 Files created:")
+    print(f"   1. {CLEANED_FILE}")
+    print(f"   2. {DUPLICATE_REPORT}")
+    print("\n💡 Next step: Use the CLEANED file for your analysis")
+    print("=" * 80)
+
+if __name__ == "__main__":
+    analyze_and_remove_duplicates()
