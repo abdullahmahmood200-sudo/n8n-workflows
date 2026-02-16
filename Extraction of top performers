@@ -1,0 +1,296 @@
+import pandas as pd
+import os
+
+# ==========================================
+# CONFIGURATION
+# ==========================================
+# This script will work with the file you uploaded
+INPUT_FILE = r'D:\Monthly Reports\Merged Output\Validated Poker Stats.xlsx'
+OUTPUT_FOLDER = r'D:\Monthly Reports\Merged Output'
+TOP_PERFORMERS_FILE = os.path.join(OUTPUT_FOLDER, 'Top_Bottom_Performers.xlsx')
+CLEANED_FILE = os.path.join(OUTPUT_FOLDER, 'Poker_Stats_CLEANED_NoDedup.xlsx')
+
+def extract_top_bottom_performers():
+    print("=" * 80)
+    print("💰 REVENUE ANALYSIS - TOP & BOTTOM PERFORMERS")
+    print("=" * 80)
+    
+    # ==========================================
+    # STEP 1: Load data
+    # ==========================================
+    print("\n📊 Step 1: Loading data...")
+    
+    try:
+        df = pd.read_excel(INPUT_FILE)
+        print(f"✅ Loaded {len(df)} rows")
+    except Exception as e:
+        print(f"❌ Error loading file: {e}")
+        return
+    
+    # ==========================================
+    # STEP 2: Remove duplicates first
+    # ==========================================
+    print("\n🧹 Step 2: Removing duplicates...")
+    
+    initial_count = len(df)
+    df_clean = df.drop_duplicates(subset=['Member_ID', 'Source_File'], keep='first')
+    duplicates_removed = initial_count - len(df_clean)
+    
+    print(f"   Rows before: {initial_count}")
+    print(f"   Rows after: {len(df_clean)}")
+    print(f"   Duplicates removed: {duplicates_removed}")
+    
+    # Save cleaned file
+    try:
+        df_clean.to_excel(CLEANED_FILE, index=False)
+        print(f"   ✅ Cleaned file saved to: {CLEANED_FILE}")
+    except Exception as e:
+        print(f"   ⚠️  Could not save cleaned file: {e}")
+    
+    # ==========================================
+    # STEP 3: Calculate total revenue per player
+    # ==========================================
+    print("\n💵 Step 3: Calculating total revenue per player...")
+    
+    # Revenue = Rake & Fee (what the house makes from each player)
+    # Aggregate all rake across all weeks for each player
+    
+    # Group by Member_ID and aggregate
+    player_revenue = df_clean.groupby('Member_ID').agg({
+        'Nickname': 'first',  # Take first nickname
+        'Country': 'first',   # Take first country
+        'Role': 'first',      # Take first role
+        'Rake_Ring_NLH': 'sum',
+        'Rake_Ring_PLO_Combined': 'sum',
+        'Rake_Ring_Total': 'sum',
+        'Rake_MTT_NLH': 'sum',
+        'Rake_MTT_PLO_Combined': 'sum',
+        'Rake_MTT_Total': 'sum',
+        'Hands_Ring_Total': 'sum',
+        'Hands_MTT_Total': 'sum',
+        'Source_File': 'count'  # Count how many weeks they played
+    }).reset_index()
+    
+    # Rename Source_File count to Weeks_Active
+    player_revenue.rename(columns={'Source_File': 'Weeks_Active'}, inplace=True)
+    
+    # Calculate total revenue (Ring + MTT)
+    player_revenue['Total_Revenue'] = (
+        player_revenue['Rake_Ring_Total'] + 
+        player_revenue['Rake_MTT_Total']
+    )
+    
+    # Calculate total hands played
+    player_revenue['Total_Hands'] = (
+        player_revenue['Hands_Ring_Total'] + 
+        player_revenue['Hands_MTT_Total']
+    )
+    
+    # Calculate revenue per hand (efficiency metric)
+    player_revenue['Revenue_Per_Hand'] = (
+        player_revenue['Total_Revenue'] / player_revenue['Total_Hands']
+    ).fillna(0)
+    
+    print(f"✅ Analyzed {len(player_revenue)} unique players")
+    print(f"   Total revenue generated: ${player_revenue['Total_Revenue'].sum():,.2f}")
+    
+    # ==========================================
+    # STEP 4: Sort by total revenue
+    # ==========================================
+    print("\n📊 Step 4: Ranking players by revenue...")
+    
+    # Sort by total revenue (descending)
+    player_revenue_sorted = player_revenue.sort_values('Total_Revenue', ascending=False).reset_index(drop=True)
+    
+    # Add rank
+    player_revenue_sorted['Rank'] = range(1, len(player_revenue_sorted) + 1)
+    
+    # Add percentile
+    player_revenue_sorted['Percentile'] = (
+        (player_revenue_sorted['Rank'] / len(player_revenue_sorted)) * 100
+    ).round(2)
+    
+    print(f"✅ Players ranked from highest to lowest revenue")
+    
+    # ==========================================
+    # STEP 5: Extract segments
+    # ==========================================
+    print("\n🎯 Step 5: Extracting performer segments...")
+    
+    total_players = len(player_revenue_sorted)
+    
+    # Calculate cutoff positions
+    top_5_count = max(1, int(total_players * 0.05))
+    top_10_count = max(1, int(total_players * 0.10))
+    top_20_count = max(1, int(total_players * 0.20))
+    bottom_50_count = max(1, int(total_players * 0.50))
+    
+    # Extract segments
+    top_5_pct = player_revenue_sorted.head(top_5_count).copy()
+    top_10_pct = player_revenue_sorted.head(top_10_count).copy()
+    top_20_pct = player_revenue_sorted.head(top_20_count).copy()
+    bottom_50_pct = player_revenue_sorted.tail(bottom_50_count).copy()
+    
+    # Add segment labels
+    top_5_pct['Segment'] = 'Top 5%'
+    top_10_pct['Segment'] = 'Top 10%'
+    top_20_pct['Segment'] = 'Top 20%'
+    bottom_50_pct['Segment'] = 'Bottom 50%'
+    
+    print(f"   Top 5%: {len(top_5_pct)} players")
+    print(f"   Top 10%: {len(top_10_pct)} players")
+    print(f"   Top 20%: {len(top_20_pct)} players")
+    print(f"   Bottom 50%: {len(bottom_50_pct)} players")
+    
+    # ==========================================
+    # STEP 6: Calculate segment statistics
+    # ==========================================
+    print("\n📈 Step 6: Calculating segment statistics...")
+    
+    def calc_segment_stats(segment_df, segment_name):
+        total_revenue_all = player_revenue_sorted['Total_Revenue'].sum()
+        return {
+            'Segment': segment_name,
+            'Player_Count': len(segment_df),
+            'Total_Revenue': segment_df['Total_Revenue'].sum(),
+            'Avg_Revenue': segment_df['Total_Revenue'].mean(),
+            'Median_Revenue': segment_df['Total_Revenue'].median(),
+            'Min_Revenue': segment_df['Total_Revenue'].min(),
+            'Max_Revenue': segment_df['Total_Revenue'].max(),
+            'Avg_Weeks_Active': segment_df['Weeks_Active'].mean(),
+            'Total_Hands': segment_df['Total_Hands'].sum(),
+            'Avg_Revenue_Per_Hand': segment_df['Revenue_Per_Hand'].mean(),
+            'Pct_of_Total_Revenue': (segment_df['Total_Revenue'].sum() / total_revenue_all * 100) if total_revenue_all > 0 else 0
+        }
+    
+    segment_stats = [
+        calc_segment_stats(top_5_pct, 'Top 5%'),
+        calc_segment_stats(top_10_pct, 'Top 10%'),
+        calc_segment_stats(top_20_pct, 'Top 20%'),
+        calc_segment_stats(bottom_50_pct, 'Bottom 50%')
+    ]
+    
+    df_segment_stats = pd.DataFrame(segment_stats)
+    
+    # Display key insights
+    print("\n   💡 Key Insights:")
+    for _, row in df_segment_stats.iterrows():
+        print(f"   {row['Segment']}: {row['Player_Count']} players generate "
+              f"${row['Total_Revenue']:,.2f} ({row['Pct_of_Total_Revenue']:.1f}% of total)")
+    
+    # ==========================================
+    # STEP 7: Select relevant columns for output
+    # ==========================================
+    print("\n📋 Step 7: Preparing output files...")
+    
+    # Define columns to include in output
+    output_columns = [
+        'Rank',
+        'Member_ID',
+        'Nickname',
+        'Country',
+        'Role',
+        'Total_Revenue',
+        'Rake_Ring_Total',
+        'Rake_MTT_Total',
+        'Total_Hands',
+        'Hands_Ring_Total',
+        'Hands_MTT_Total',
+        'Weeks_Active',
+        'Revenue_Per_Hand',
+        'Percentile',
+        'Segment'
+    ]
+    
+    # Prepare dataframes with selected columns
+    top_5_output = top_5_pct[output_columns].copy()
+    top_10_output = top_10_pct[output_columns].copy()
+    top_20_output = top_20_pct[output_columns].copy()
+    bottom_50_output = bottom_50_pct[output_columns].copy()
+    
+    # ==========================================
+    # STEP 8: Save to Excel with multiple sheets
+    # ==========================================
+    print("\n💾 Step 8: Saving results to Excel...")
+    
+    try:
+        with pd.ExcelWriter(TOP_PERFORMERS_FILE, engine='openpyxl') as writer:
+            # Sheet 1: Overview Statistics
+            df_segment_stats.to_excel(writer, sheet_name='Overview', index=False)
+            
+            # Sheet 2: Top 5%
+            top_5_output.to_excel(writer, sheet_name='Top 5%', index=False)
+            
+            # Sheet 3: Top 10%
+            top_10_output.to_excel(writer, sheet_name='Top 10%', index=False)
+            
+            # Sheet 4: Top 20%
+            top_20_output.to_excel(writer, sheet_name='Top 20%', index=False)
+            
+            # Sheet 5: Bottom 50%
+            bottom_50_output.to_excel(writer, sheet_name='Bottom 50%', index=False)
+            
+            # Sheet 6: All Players Ranked
+            player_revenue_sorted[output_columns[:-1]].to_excel(
+                writer, sheet_name='All Players Ranked', index=False
+            )
+            
+            # Sheet 7: Top 10 Individual Players
+            top_10_individuals = player_revenue_sorted.head(10)[output_columns[:-1]].copy()
+            top_10_individuals.to_excel(writer, sheet_name='Top 10 Players', index=False)
+        
+        print(f"✅ Results saved to: {TOP_PERFORMERS_FILE}")
+        print(f"\n   📄 Sheets created:")
+        print(f"      1. Overview - Segment statistics")
+        print(f"      2. Top 5% - {len(top_5_output)} players")
+        print(f"      3. Top 10% - {len(top_10_output)} players")
+        print(f"      4. Top 20% - {len(top_20_output)} players")
+        print(f"      5. Bottom 50% - {len(bottom_50_output)} players")
+        print(f"      6. All Players Ranked - {len(player_revenue_sorted)} players")
+        print(f"      7. Top 10 Players - Individual stars")
+        
+    except Exception as e:
+        print(f"❌ Error saving file: {e}")
+        return
+    
+    # ==========================================
+    # STEP 9: Display top performers preview
+    # ==========================================
+    print("\n" + "=" * 80)
+    print("🏆 TOP 10 REVENUE GENERATORS")
+    print("=" * 80)
+    
+    top_10 = player_revenue_sorted.head(10)
+    for idx, row in top_10.iterrows():
+        print(f"{row['Rank']:2d}. {row['Nickname']:20s} (ID: {row['Member_ID']})")
+        print(f"    Revenue: ${row['Total_Revenue']:12,.2f} | "
+              f"Weeks: {row['Weeks_Active']:2d} | "
+              f"Hands: {int(row['Total_Hands']):,}")
+        print(f"    Ring: ${row['Rake_Ring_Total']:10,.2f} | "
+              f"MTT: ${row['Rake_MTT_Total']:10,.2f}")
+        print()
+    
+    # ==========================================
+    # FINAL SUMMARY
+    # ==========================================
+    print("=" * 80)
+    print("🎯 ANALYSIS COMPLETE")
+    print("=" * 80)
+    print(f"✅ Total players analyzed: {len(player_revenue_sorted)}")
+    print(f"✅ Total revenue tracked: ${player_revenue_sorted['Total_Revenue'].sum():,.2f}")
+    print(f"\n📊 Revenue Distribution:")
+    print(f"   Top 5% ({top_5_count} players): ${top_5_pct['Total_Revenue'].sum():,.2f} "
+          f"({df_segment_stats.iloc[0]['Pct_of_Total_Revenue']:.1f}%)")
+    print(f"   Top 10% ({top_10_count} players): ${top_10_pct['Total_Revenue'].sum():,.2f} "
+          f"({df_segment_stats.iloc[1]['Pct_of_Total_Revenue']:.1f}%)")
+    print(f"   Top 20% ({top_20_count} players): ${top_20_pct['Total_Revenue'].sum():,.2f} "
+          f"({df_segment_stats.iloc[2]['Pct_of_Total_Revenue']:.1f}%)")
+    print(f"   Bottom 50% ({bottom_50_count} players): ${bottom_50_pct['Total_Revenue'].sum():,.2f} "
+          f"({df_segment_stats.iloc[3]['Pct_of_Total_Revenue']:.1f}%)")
+    print(f"\n📁 Output files:")
+    print(f"   1. {TOP_PERFORMERS_FILE}")
+    print(f"   2. {CLEANED_FILE} (deduped data)")
+    print("=" * 80)
+
+if __name__ == "__main__":
+    extract_top_bottom_performers()
