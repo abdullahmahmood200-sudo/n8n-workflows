@@ -1,2 +1,2 @@
-# n8n-workflows
-This is the repository containing all the files of n8n workflows
+# Poker Data Python Scripts
+This is the repository containing all the files of Poker Data Python Scripts
