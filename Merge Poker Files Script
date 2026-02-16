@@ -1,0 +1,191 @@
+import pandas as pd
+import os
+
+# ==========================================
+# CONFIGURATION
+# ==========================================
+INPUT_FOLDER = r'D:\Monthly Reports'
+OUTPUT_FOLDER = r'D:\Monthly Reports\Merged Output'
+OUTPUT_FILE = os.path.join(OUTPUT_FOLDER, 'Poker_Stats_Filtered.xlsx')
+TARGET_SHEET = 'Member Statistics'
+
+def merge_poker_stats():
+    all_data = []
+    
+    if not os.path.exists(OUTPUT_FOLDER):
+        os.makedirs(OUTPUT_FOLDER)
+    
+    print(f"🚀 Processing files from: {INPUT_FOLDER}")
+    print(f"📊 Extracting: Player P&L, Rake&Fee, Played Hands (Ring Game + MTT only, NLH + Combined PLO)")
+    print("-" * 80)
+    
+    for filename in os.listdir(INPUT_FOLDER):
+        if filename.endswith('.xlsx') and not filename.startswith('~$'):
+            file_path = os.path.join(INPUT_FOLDER, filename)
+            
+            try:
+                # Read with multi-level headers (rows 4, 5, 6)
+                df_raw = pd.read_excel(file_path, sheet_name=TARGET_SHEET, header=[3, 4, 5])
+                
+                # ==========================================
+                # HELPER FUNCTION TO FIND COLUMNS
+                # ==========================================
+                def find_column(level0, level1, level2):
+                    """Find column index by matching multi-level header"""
+                    for idx, col in enumerate(df_raw.columns):
+                        if (str(level0).lower() in str(col[0]).lower() and
+                            str(level1).lower() in str(col[1]).lower() and
+                            str(level2).lower() in str(col[2]).lower()):
+                            return idx
+                    return None
+                
+                def get_column_safe(level0, level1, level2, default=0):
+                    """Safely get column data, return zeros if not found"""
+                    idx = find_column(level0, level1, level2)
+                    if idx is not None:
+                        return df_raw.iloc[:, idx]
+                    else:
+                        print(f"  ⚠️  Column not found: {level0}/{level1}/{level2} - using zeros")
+                        return pd.Series([default] * len(df_raw))
+                
+                # ==========================================
+                # EXTRACT COLUMNS USING ROBUST MATCHING
+                # ==========================================
+                
+                # Player identification (using exact position since these are always first)
+                member_id = df_raw.iloc[:, 8]        # Member ID
+                nickname = df_raw.iloc[:, 9]         # Nickname
+                country = df_raw.iloc[:, 6]          # Country
+                role = df_raw.iloc[:, 7]             # Role
+                
+                # --- PLAYER P&L ---
+                # Ring Game
+                pnl_ring_nlh = get_column_safe('Player P&L', 'Ring Game', 'NLH')
+                pnl_ring_plo = get_column_safe('Player P&L', 'Ring Game', 'PLO')
+                pnl_ring_plo5 = get_column_safe('Player P&L', 'Ring Game', 'PLO5')
+                pnl_ring_plo6 = get_column_safe('Player P&L', 'Ring Game', 'PLO6')
+                pnl_ring_plo_combined = pnl_ring_plo + pnl_ring_plo5 + pnl_ring_plo6
+                
+                # Find Player P&L Total column
+                pnl_total_idx = find_column('Player P&L', 'Total', '')
+                pnl_ring_total = df_raw.iloc[:, pnl_total_idx] if pnl_total_idx else pnl_ring_nlh + pnl_ring_plo_combined
+                
+                # MTT
+                pnl_mtt_nlh = get_column_safe('Player P&L', 'MTT', 'NLH')
+                pnl_mtt_plo = get_column_safe('Player P&L', 'MTT', 'PLO')
+                pnl_mtt_plo5 = get_column_safe('Player P&L', 'MTT', 'PLO5')
+                pnl_mtt_plo6 = get_column_safe('Player P&L', 'MTT', 'PLO6')
+                pnl_mtt_plo_combined = pnl_mtt_plo + pnl_mtt_plo5 + pnl_mtt_plo6
+                pnl_mtt_total = df_raw.iloc[:, pnl_total_idx] if pnl_total_idx else pnl_mtt_nlh + pnl_mtt_plo_combined
+                
+                # --- RAKE & FEE ---
+                # Ring Game
+                rake_ring_nlh = get_column_safe('Rake&Fee', 'Ring Game', 'NLH')
+                rake_ring_plo = get_column_safe('Rake&Fee', 'Ring Game', 'PLO')
+                rake_ring_plo5 = get_column_safe('Rake&Fee', 'Ring Game', 'PLO5')
+                rake_ring_plo6 = get_column_safe('Rake&Fee', 'Ring Game', 'PLO6')
+                rake_ring_plo_combined = rake_ring_plo + rake_ring_plo5 + rake_ring_plo6
+                
+                # Find Rake&Fee Total column
+                rake_total_idx = find_column('Rake&Fee', 'Total', '')
+                rake_ring_total = df_raw.iloc[:, rake_total_idx] if rake_total_idx else rake_ring_nlh + rake_ring_plo_combined
+                
+                # MTT
+                rake_mtt_nlh = get_column_safe('Rake&Fee', 'MTT', 'NLH')
+                rake_mtt_plo = get_column_safe('Rake&Fee', 'MTT', 'PLO')
+                rake_mtt_plo5 = get_column_safe('Rake&Fee', 'MTT', 'PLO5')
+                rake_mtt_plo6 = get_column_safe('Rake&Fee', 'MTT', 'PLO6')
+                rake_mtt_plo_combined = rake_mtt_plo + rake_mtt_plo5 + rake_mtt_plo6
+                rake_mtt_total = df_raw.iloc[:, rake_total_idx] if rake_total_idx else rake_mtt_nlh + rake_mtt_plo_combined
+                
+                # --- PLAYED HANDS ---
+                # Ring Game
+                hands_ring_nlh = get_column_safe('Played Hands', 'Ring Game', 'NLH')
+                hands_ring_plo = get_column_safe('Played Hands', 'Ring Game', 'PLO')
+                hands_ring_plo5 = get_column_safe('Played Hands', 'Ring Game', 'PLO5')
+                hands_ring_plo6 = get_column_safe('Played Hands', 'Ring Game', 'PLO6')
+                hands_ring_plo_combined = hands_ring_plo + hands_ring_plo5 + hands_ring_plo6
+                
+                # Find Played Hands Total column
+                hands_total_idx = find_column('Played Hands', 'Total', '')
+                hands_ring_total = df_raw.iloc[:, hands_total_idx] if hands_total_idx else hands_ring_nlh + hands_ring_plo_combined
+                
+                # MTT
+                hands_mtt_nlh = get_column_safe('Played Hands', 'MTT', 'NLH')
+                hands_mtt_plo = get_column_safe('Played Hands', 'MTT', 'PLO')
+                hands_mtt_plo5 = get_column_safe('Played Hands', 'MTT', 'PLO5')
+                hands_mtt_plo6 = get_column_safe('Played Hands', 'MTT', 'PLO6')
+                hands_mtt_plo_combined = hands_mtt_plo + hands_mtt_plo5 + hands_mtt_plo6
+                hands_mtt_total = df_raw.iloc[:, hands_total_idx] if hands_total_idx else hands_mtt_nlh + hands_mtt_plo_combined
+                
+                # ==========================================
+                # BUILD FINAL DATAFRAME
+                # ==========================================
+                df_clean = pd.DataFrame({
+                    'Member_ID': member_id,
+                    'Nickname': nickname,
+                    'Country': country,
+                    'Role': role,
+                    
+                    # Player P&L
+                    'PnL_Ring_NLH': pnl_ring_nlh,
+                    'PnL_Ring_PLO_Combined': pnl_ring_plo_combined,
+                    'PnL_Ring_Total': pnl_ring_total,
+                    'PnL_MTT_NLH': pnl_mtt_nlh,
+                    'PnL_MTT_PLO_Combined': pnl_mtt_plo_combined,
+                    'PnL_MTT_Total': pnl_mtt_total,
+                    
+                    # Rake & Fee
+                    'Rake_Ring_NLH': rake_ring_nlh,
+                    'Rake_Ring_PLO_Combined': rake_ring_plo_combined,
+                    'Rake_Ring_Total': rake_ring_total,
+                    'Rake_MTT_NLH': rake_mtt_nlh,
+                    'Rake_MTT_PLO_Combined': rake_mtt_plo_combined,
+                    'Rake_MTT_Total': rake_mtt_total,
+                    
+                    # Played Hands
+                    'Hands_Ring_NLH': hands_ring_nlh,
+                    'Hands_Ring_PLO_Combined': hands_ring_plo_combined,
+                    'Hands_Ring_Total': hands_ring_total,
+                    'Hands_MTT_NLH': hands_mtt_nlh,
+                    'Hands_MTT_PLO_Combined': hands_mtt_plo_combined,
+                    'Hands_MTT_Total': hands_mtt_total,
+                    
+                    'Source_File': filename
+                })
+                
+                # ==========================================
+                # DATA CLEANING
+                # ==========================================
+                # Remove rows where Nickname is empty or "TOTAL"
+                df_clean = df_clean[df_clean['Nickname'].notna()]
+                df_clean = df_clean[df_clean['Nickname'].astype(str).str.upper() != 'TOTAL']
+                
+                # Remove completely empty rows (all NaN except source file)
+                df_clean = df_clean.dropna(how='all', subset=df_clean.columns[:-1])
+                
+                all_data.append(df_clean)
+                print(f"✅ Extracted {len(df_clean)} rows from: {filename}")
+                
+            except Exception as e:
+                print(f"❌ Error in {filename}: {e}")
+                import traceback
+                traceback.print_exc()
+    
+    # ==========================================
+    # MERGE AND SAVE
+    # ==========================================
+    if all_data:
+        combined_df = pd.concat(all_data, ignore_index=True)
+        combined_df.to_excel(OUTPUT_FILE, index=False)
+        
+        print("\n" + "=" * 80)
+        print(f"✨ SUCCESS! Data merged and saved.")
+        print(f"📊 Total rows extracted: {len(combined_df)}")
+        print(f"📁 File Location: {OUTPUT_FILE}")
+        print("=" * 80)
+    else:
+        print("\n❌ No data found. Check if 'Member Statistics' sheet exists in all files.")
+
+if __name__ == "__main__":
+    merge_poker_stats()
