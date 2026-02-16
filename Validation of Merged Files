@@ -1,0 +1,267 @@
+import pandas as pd
+import os
+
+# ==========================================
+# CONFIGURATION
+# ==========================================
+INPUT_FOLDER = r'D:\Monthly Reports'
+MERGED_FILE = r'D:\Monthly Reports\Merged Output\Poker_Stats_Filtered.xlsx'
+VALIDATION_REPORT = r'D:\Monthly Reports\Merged Output\Validation_Report.xlsx'
+TARGET_SHEET = 'Member Statistics'
+
+def validate_merge():
+    print("=" * 80)
+    print("🔍 MERGE VALIDATION REPORT")
+    print("=" * 80)
+    
+    # ==========================================
+    # STEP 1: Load the merged file
+    # ==========================================
+    print("\n📊 Step 1: Loading merged file...")
+    try:
+        df_merged = pd.read_excel(MERGED_FILE)
+        print(f"✅ Merged file loaded successfully")
+        print(f"   Total rows in merged file: {len(df_merged)}")
+        print(f"   Total columns: {len(df_merged.columns)}")
+    except Exception as e:
+        print(f"❌ Error loading merged file: {e}")
+        return
+    
+    # ==========================================
+    # STEP 2: Count files and rows from source
+    # ==========================================
+    print("\n📂 Step 2: Analyzing source files...")
+    
+    source_files = []
+    total_expected_rows = 0
+    file_stats = []
+    
+    for filename in os.listdir(INPUT_FOLDER):
+        if filename.endswith('.xlsx') and not filename.startswith('~$'):
+            file_path = os.path.join(INPUT_FOLDER, filename)
+            
+            try:
+                # Read with same header settings
+                df_source = pd.read_excel(file_path, sheet_name=TARGET_SHEET, header=[3, 4, 5])
+                
+                # Get nickname column (position 9)
+                nickname_col = df_source.iloc[:, 9]
+                
+                # Count valid rows (exclude empty and TOTAL rows)
+                valid_rows = nickname_col[
+                    nickname_col.notna() & 
+                    (nickname_col.astype(str).str.upper() != 'TOTAL')
+                ]
+                
+                row_count = len(valid_rows)
+                total_expected_rows += row_count
+                
+                source_files.append(filename)
+                file_stats.append({
+                    'Source_File': filename,
+                    'Rows_In_Source': row_count,
+                    'Rows_In_Merged': 0  # Will update this
+                })
+                
+            except Exception as e:
+                print(f"  ⚠️  Could not read {filename}: {e}")
+    
+    print(f"✅ Source files analyzed: {len(source_files)}")
+    print(f"   Total expected rows: {total_expected_rows}")
+    
+    # ==========================================
+    # STEP 3: Compare row counts per file
+    # ==========================================
+    print("\n🔢 Step 3: Comparing row counts per file...")
+    
+    # Count rows in merged file by source
+    merged_counts = df_merged['Source_File'].value_counts().to_dict()
+    
+    # Update file_stats with merged counts
+    for stat in file_stats:
+        filename = stat['Source_File']
+        stat['Rows_In_Merged'] = merged_counts.get(filename, 0)
+        stat['Difference'] = stat['Rows_In_Merged'] - stat['Rows_In_Source']
+        stat['Match'] = '✅' if stat['Difference'] == 0 else '❌'
+    
+    # Create DataFrame for file comparison
+    df_file_comparison = pd.DataFrame(file_stats)
+    
+    # Check for mismatches
+    mismatches = df_file_comparison[df_file_comparison['Difference'] != 0]
+    
+    if len(mismatches) == 0:
+        print(f"✅ Perfect match! All {len(source_files)} files have correct row counts")
+    else:
+        print(f"⚠️  Found {len(mismatches)} files with row count mismatches:")
+        for _, row in mismatches.iterrows():
+            print(f"   {row['Source_File']}: Expected {row['Rows_In_Source']}, Got {row['Rows_In_Merged']} (Diff: {row['Difference']})")
+    
+    # ==========================================
+    # STEP 4: Check for missing files
+    # ==========================================
+    print("\n📁 Step 4: Checking for missing files...")
+    
+    files_in_merged = df_merged['Source_File'].unique()
+    missing_files = set(source_files) - set(files_in_merged)
+    extra_files = set(files_in_merged) - set(source_files)
+    
+    if len(missing_files) == 0:
+        print(f"✅ No missing files - all {len(source_files)} source files are present in merged data")
+    else:
+        print(f"❌ Missing files ({len(missing_files)}):")
+        for f in missing_files:
+            print(f"   - {f}")
+    
+    if len(extra_files) > 0:
+        print(f"⚠️  Extra files in merged data (not in source folder):")
+        for f in extra_files:
+            print(f"   - {f}")
+    
+    # ==========================================
+    # STEP 5: Check for duplicate players
+    # ==========================================
+    print("\n👥 Step 5: Checking for duplicates...")
+    
+    # Check for duplicate Member_ID + Source_File combinations
+    duplicates = df_merged[df_merged.duplicated(subset=['Member_ID', 'Source_File'], keep=False)]
+    
+    if len(duplicates) == 0:
+        print("✅ No duplicate players found within same source file")
+    else:
+        print(f"⚠️  Found {len(duplicates)} duplicate entries:")
+        print(duplicates[['Member_ID', 'Nickname', 'Source_File']].head(10))
+    
+    # ==========================================
+    # STEP 6: Data quality checks
+    # ==========================================
+    print("\n🔍 Step 6: Data quality checks...")
+    
+    # Check for null nicknames (shouldn't exist after cleaning)
+    null_nicknames = df_merged[df_merged['Nickname'].isna()]
+    print(f"   Null nicknames: {len(null_nicknames)} {'✅' if len(null_nicknames) == 0 else '❌'}")
+    
+    # Check for "TOTAL" rows (shouldn't exist after cleaning)
+    total_rows = df_merged[df_merged['Nickname'].astype(str).str.upper() == 'TOTAL']
+    print(f"   'TOTAL' rows: {len(total_rows)} {'✅' if len(total_rows) == 0 else '❌'}")
+    
+    # Check for null Member IDs
+    null_ids = df_merged[df_merged['Member_ID'].isna()]
+    print(f"   Null Member IDs: {len(null_ids)} {'✅' if len(null_ids) == 0 else '❌'}")
+    
+    # Check columns
+    expected_columns = 23  # 4 ID + 6 PnL + 6 Rake + 6 Hands + 1 Source
+    print(f"   Column count: {len(df_merged.columns)} (Expected: {expected_columns}) {'✅' if len(df_merged.columns) == expected_columns else '❌'}")
+    
+    # ==========================================
+    # STEP 7: Summary statistics
+    # ==========================================
+    print("\n📈 Step 7: Summary statistics...")
+    
+    summary_stats = {
+        'Metric': [
+            'Total Source Files',
+            'Files in Merged Data',
+            'Missing Files',
+            'Total Expected Rows',
+            'Total Merged Rows',
+            'Row Difference',
+            'Unique Players (by ID)',
+            'Files with Mismatches',
+            'Duplicate Entries',
+            'Data Quality Issues'
+        ],
+        'Value': [
+            len(source_files),
+            len(files_in_merged),
+            len(missing_files),
+            total_expected_rows,
+            len(df_merged),
+            len(df_merged) - total_expected_rows,
+            df_merged['Member_ID'].nunique(),
+            len(mismatches),
+            len(duplicates),
+            len(null_nicknames) + len(total_rows) + len(null_ids)
+        ],
+        'Status': [
+            '✅',
+            '✅' if len(files_in_merged) == len(source_files) else '❌',
+            '✅' if len(missing_files) == 0 else '❌',
+            '✅',
+            '✅',
+            '✅' if len(df_merged) == total_expected_rows else '⚠️',
+            '✅',
+            '✅' if len(mismatches) == 0 else '⚠️',
+            '✅' if len(duplicates) == 0 else '⚠️',
+            '✅' if (len(null_nicknames) + len(total_rows) + len(null_ids)) == 0 else '❌'
+        ]
+    }
+    
+    df_summary = pd.DataFrame(summary_stats)
+    
+    print("\n" + df_summary.to_string(index=False))
+    
+    # ==========================================
+    # STEP 8: Save validation report
+    # ==========================================
+    print(f"\n💾 Step 8: Saving validation report...")
+    
+    try:
+        with pd.ExcelWriter(VALIDATION_REPORT, engine='openpyxl') as writer:
+            # Sheet 1: Summary
+            df_summary.to_excel(writer, sheet_name='Summary', index=False)
+            
+            # Sheet 2: File-by-file comparison
+            df_file_comparison.to_excel(writer, sheet_name='File Comparison', index=False)
+            
+            # Sheet 3: Mismatches (if any)
+            if len(mismatches) > 0:
+                mismatches.to_excel(writer, sheet_name='Mismatches', index=False)
+            
+            # Sheet 4: Duplicates (if any)
+            if len(duplicates) > 0:
+                duplicates.to_excel(writer, sheet_name='Duplicates', index=False)
+            
+            # Sheet 5: Sample of merged data
+            df_merged.head(100).to_excel(writer, sheet_name='Sample Data', index=False)
+        
+        print(f"✅ Validation report saved to: {VALIDATION_REPORT}")
+    except Exception as e:
+        print(f"❌ Error saving report: {e}")
+    
+    # ==========================================
+    # FINAL VERDICT
+    # ==========================================
+    print("\n" + "=" * 80)
+    print("🎯 FINAL VERDICT")
+    print("=" * 80)
+    
+    all_checks_passed = (
+        len(missing_files) == 0 and
+        len(mismatches) == 0 and
+        len(duplicates) == 0 and
+        len(null_nicknames) == 0 and
+        len(total_rows) == 0 and
+        len(df_merged) == total_expected_rows
+    )
+    
+    if all_checks_passed:
+        print("✅ PERFECT MERGE! All data validated successfully.")
+        print("   • All source files accounted for")
+        print("   • Row counts match exactly")
+        print("   • No duplicates or data quality issues")
+        print("   • Safe to use the merged file")
+    else:
+        print("⚠️  MERGE COMPLETED WITH WARNINGS")
+        print("   Review the validation report for details:")
+        print(f"   {VALIDATION_REPORT}")
+        
+        if len(df_merged) == total_expected_rows:
+            print("\n✅ Row count matches - data is likely complete")
+        else:
+            print(f"\n⚠️  Row count difference: {len(df_merged) - total_expected_rows}")
+    
+    print("=" * 80)
+
+if __name__ == "__main__":
+    validate_merge()
